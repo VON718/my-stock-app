@@ -3,61 +3,120 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
 
-st.set_page_config(page_title="Barchart Full Analysis", layout="wide")
-st.title("📊 全指標股票技術分析矩陣")
+# 網頁配置
+st.set_page_config(page_title="Barchart 模擬分析器", layout="wide")
 
-ticker_input = st.text_input("輸入股票代碼 (用逗號分隔):", "BFLY, BAER, NVDA")
+st.title("📊 專業技術指標矩陣 (Barchart Style)")
+st.markdown("""
+本系統模擬 Barchart Opinion 運作原理，計算 13 個核心技術指標。
+- **Overall Opinion**: 基於 13 個指標的買入佔比。
+- **Strength**: 基於長期均線 (100D/200D) 的排列穩定性。
+- **Direction**: 基於過去 5 個交易日的價格走勢。
+""")
+
+# 用戶輸入股票代碼
+ticker_input = st.text_input("請輸入股票代碼 (用逗號分隔):", "BFLY, CLOV, NVDA, TSLA")
 tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
-def get_barchart_logic(symbol):
+def get_barchart_full_analysis(symbol):
     try:
+        # 下載兩年數據以確保指標計算穩定
         df = yf.download(symbol, period="2y", interval="1d", progress=False, threads=False)
-        if df.empty: return None
+        if df.empty or len(df) < 200:
+            return None
+
+        # 處理 Multi-index 問題（適配新版 yfinance）
         c = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
         v = df['Volume'].iloc[:, 0] if isinstance(df['Volume'], pd.DataFrame) else df['Volume']
 
-        # 計算均線
-        ma20, ma50, ma100, ma150, ma200 = [ta.sma(c, length=l) for l in [20, 50, 100, 150, 200]]
+        # 1. 計算所有均線指標
+        ma20 = ta.sma(c, length=20)
+        ma50 = ta.sma(c, length=50)
+        ma100 = ta.sma(c, length=100)
+        ma150 = ta.sma(c, length=150)
+        ma200 = ta.sma(c, length=200)
         
-        # 計算成交量均線
-        v20, v50, v100 = [v.rolling(window=l).mean() for l in [20, 50, 100]]
+        # 2. 計算成交量均線
+        v20 = v.rolling(window=20).mean()
+        v50 = v.rolling(window=50).mean()
+        v100 = v.rolling(window=100).mean()
 
         last_p = c.iloc[-1]
         
-        def sig(cond): return "🟢 Buy" if cond else "🔴 Sell"
+        # 3. 定義 13 個具體的 Barchart 判斷條件
+        # [Signal] 買入條件清單
+        conds = [
+            last_p > ma20.iloc[-1],           # 20 Day MA
+            ma20.iloc[-1] > ma50.iloc[-1],    # 20-50 Cross
+            ma20.iloc[-1] > ma100.iloc[-1],   # 20-100 Cross
+            ma20.iloc[-1] > ma200.iloc[-1],   # 20-200 Cross
+            last_p > ma50.iloc[-1],           # 50 Day MA
+            ma50.iloc[-1] > ma100.iloc[-1],   # 50-100 Cross
+            ma50.iloc[-1] > ma150.iloc[-1],   # 50-150 Cross
+            ma50.iloc[-1] > ma200.iloc[-1],   # 50-200 Cross
+            last_p > ma100.iloc[-1],          # 100 Day MA
+            last_p > ma150.iloc[-1],          # 150 Day MA
+            last_p > ma200.iloc[-1],          # 200 Day MA
+            ma100.iloc[-1] > ma200.iloc[-1],  # 100-200 Cross
+            v.iloc[-1] > v20.iloc[-1]         # Volume Status
+        ]
 
-        # 構建數據字典 (這將成為表格的一行)
+        # 4. 計算 Overall Opinion %
+        buy_count = sum([1 for b in conds if b])
+        opinion_pct = int((buy_count / len(conds)) * 100)
+        opinion_label = "Buy" if opinion_pct >= 70 else "Sell" if opinion_pct <= 30 else "Hold"
+
+        # 5. 計算 Strength (基於 100/150/200 均線)
+        long_term_score = sum([1 for b in conds[8:12] if b])
+        strength = "Strongest" if long_term_score >= 3 else "Average" if long_term_score >= 2 else "Weakest"
+
+        # 6. 計算 Direction (最近 5 天走勢)
+        price_change_5d = (c.iloc[-1] - c.iloc[-5]) / c.iloc[-5]
+        direction = "Strengthening" if price_change_5d > 0 else "Weakening"
+
+        # 7. 格式化輸出
+        def format_sig(cond): return "🟢 Buy" if cond else "🔴 Sell"
+
         data = {
-            "指標名稱": [
+            "Indicator": [
                 "Overall Opinion", "Strength", "Direction", "---",
                 "20 Day Moving Average", "20-50 Day MA Crossover", "20-100 Day MA Crossover", "20-200 Day MA Crossover", "20-Day Avg Volume", "---",
                 "50 Day Moving Average", "50-100 Day MA Crossover", "50-150 Day MA Crossover", "50-200 Day MA Crossover", "50-Day Avg Volume", "---",
                 "100 Day Moving Average", "150 Day Moving Average", "200 Day Moving Average", "100-200 Day MA Crossover", "100-Day Avg Volume"
             ],
             symbol: [
-                "100% Buy" if last_p > ma50.iloc[-1] else "Wait", "Strongest", "Strengthening", "",
-                sig(last_p > ma20.iloc[-1]), sig(ma20.iloc[-1] > ma50.iloc[-1]), sig(ma20.iloc[-1] > ma100.iloc[-1]), sig(ma20.iloc[-1] > ma200.iloc[-1]), f"{int(v20.iloc[-1]):,}", "",
-                sig(last_p > ma50.iloc[-1]), sig(ma50.iloc[-1] > ma100.iloc[-1]), sig(ma50.iloc[-1] > ma150.iloc[-1]), sig(ma50.iloc[-1] > ma200.iloc[-1]), f"{int(v50.iloc[-1]):,}", "",
-                sig(last_p > ma100.iloc[-1]), sig(last_p > ma150.iloc[-1]), sig(last_p > ma200.iloc[-1]), sig(ma100.iloc[-1] > ma200.iloc[-1]), f"{int(v100.iloc[-1]):,}"
+                f"{opinion_pct}% {opinion_label}", strength, direction, "",
+                format_sig(conds[0]), format_sig(conds[1]), format_sig(conds[2]), format_sig(conds[3]), f"{int(v20.iloc[-1]):,}", "",
+                format_sig(conds[4]), format_sig(conds[5]), format_sig(conds[6]), format_sig(conds[7]), f"{int(v50.iloc[-1]):,}", "",
+                format_sig(conds[8]), format_sig(conds[9]), format_sig(conds[10]), format_sig(conds[11]), f"{int(v100.iloc[-1]):,}"
             ]
         }
-        return pd.DataFrame(data).set_index("指標名稱")
-    except:
+        return pd.DataFrame(data).set_index("Indicator")
+    except Exception as e:
+        st.error(f"分析 {symbol} 時發生錯誤: {e}")
         return None
 
-if st.button("生成全數據對照表"):
+# 按鈕觸發分析
+if st.button("🚀 執行全指標分析"):
     all_dfs = []
-    with st.spinner('深度掃描中...'):
+    with st.spinner('正在計算大數據...'):
         for s in tickers:
-            df_stock = get_barchart_logic(s)
-            if df_stock is not None:
-                all_dfs.append(df_stock)
+            res = get_barchart_full_analysis(s)
+            if res is not None:
+                all_dfs.append(res)
     
     if all_dfs:
-        # 將所有股票的 DataFrame 橫向合併 (股票變直行)
+        # 將所有結果橫向合併
         final_df = pd.concat(all_dfs, axis=1)
         
-        # 顯示表格
+        # 使用自定義樣式顯示表格
+        def highlight_opinion(val):
+            if 'Buy' in str(val): return 'color: #00FF00; font-weight: bold'
+            if 'Sell' in str(val): return 'color: #FF4B4B; font-weight: bold'
+            return ''
+
         st.table(final_df)
     else:
-        st.error("無法獲取數據，請檢查代碼。")
+        st.warning("查無數據，請確認股票代碼（如 CLOV, NVDA）。")
+
+st.info("💡 註：100% Buy 意味著當前價格位於所有均線上方，且均線呈現多頭排列。")
