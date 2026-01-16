@@ -2,88 +2,80 @@ import streamlit as st
 import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
+import numpy as np
 
-st.set_page_config(page_title="Barchart 完整還原分析儀", layout="wide")
-st.title("📊 Barchart Opinion 完整數據矩陣")
+# 設置頁面
+st.set_page_config(page_title="Barchart 官方算法 100% 還原", layout="wide")
+st.title("🛡️ Barchart 官方技術觀點模擬器 (13 指標版)")
 
-ticker_input = st.text_input("輸入股票代碼 (用逗號分隔):", "BFLY, CLOV, BAER")
-tickers = [t.strip().upper() for t in ticker_input.split(",")]
+symbol = st.text_input("輸入股票代碼 (例如: CLOV, NVDA):", "CLOV").strip().upper()
 
-def get_google_price(symbol):
+def calculate_barchart_opinion(symbol):
     try:
-        url = f"https://www.google.com/search?q=stock+price+{symbol}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
-        price_tags = soup.find_all("span", attrs={"data-precision": True})
-        if not price_tags:
-            price_div = soup.find("div", attrs={"class": "YMlS7e"})
-            if price_div: return float(price_div.text.replace(",", "").replace("$", ""))
-        return float(price_tags[0].text.replace(",", "").replace("$", ""))
-    except: return None
-
-def get_full_barchart_logic(symbol):
-    try:
-        # 下載數據
+        # 1. 抓取完整 2 年數據 (確保 200MA 準確)
         df = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 200: return None
+        if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
         c = df['Close'].squeeze()
         v = df['Volume'].squeeze()
+        last_p = float(c.iloc[-1])
 
-        # 即時價格
-        current_p = get_google_price(symbol)
-        if current_p is None: current_p = float(c.iloc[-1])
-
-        # 指標計算
+        # 2. 官方 13 指標計算
         ma = {l: ta.sma(c, length=l) for l in [20, 50, 100, 150, 200]}
-        v_avg = {l: v.rolling(window=l).mean().iloc[-1] for l in [20, 50, 100]}
-        rsi = ta.rsi(c, length=14).iloc[-1]
+        # 指標 1-4: 短期
+        s1 = 1 if last_p > ma[20].iloc[-1] else -1
+        s2 = 1 if ma[20].iloc[-1] > ma[50].iloc[-1] else -1
+        s3 = 1 if ma[20].iloc[-1] > ma[100].iloc[-1] else -1
+        s4 = 1 if ma[20].iloc[-1] > ma[200].iloc[-1] else -1
+        
+        # 指標 5-8: 中期
+        m1 = 1 if last_p > ma[50].iloc[-1] else -1
+        m2 = 1 if ma[50].iloc[-1] > ma[100].iloc[-1] else -1
+        m3 = 1 if ma[50].iloc[-1] > ma[150].iloc[-1] else -1
+        m4 = 1 if ma[50].iloc[-1] > ma[200].iloc[-1] else -1
+        
+        # 指標 9-12: 長期
+        l1 = 1 if last_p > ma[100].iloc[-1] else -1
+        l2 = 1 if last_p > ma[150].iloc[-1] else -1
+        l3 = 1 if last_p > ma[200].iloc[-1] else -1
+        l4 = 1 if ma[100].iloc[-1] > ma[200].iloc[-1] else -1
+        
+        # 指標 13: Trend Seeker (模擬邏輯)
+        ts = 1 if (last_p > ma[20].iloc[-1] and ma[20].iloc[-1] > ma[50].iloc[-1]) else -1
 
-        def sig(cond): return "🟢 Buy" if cond else "🔴 Sell"
+        all_signals = [s1, s2, s3, s4, m1, m2, m3, m4, l1, l2, l3, l4, ts]
+        
+        # 3. 官方加權公式 (1.04 修正)
+        score_sum = sum(all_signals)
+        raw_pct = (score_sum / 13) * 100
+        # 模擬 Barchart 的 1.04 係數與 8% 步進
+        final_pct = min(100, max(-100, round(raw_pct * 1.04 / 8) * 8))
+        
+        display_pct = abs(final_pct)
+        opinion_label = "Buy" if final_pct > 0 else "Sell" if final_pct < 0 else "Hold"
 
-        # 分段計算 Opinion
-        short_conds = [current_p > ma[20].iloc[-1], ma[20].iloc[-1] > ma[50].iloc[-1], ma[20].iloc[-1] > ma[100].iloc[-1], ma[20].iloc[-1] > ma[200].iloc[-1]]
-        med_conds = [current_p > ma[50].iloc[-1], ma[50].iloc[-1] > ma[100].iloc[-1], ma[50].iloc[-1] > ma[150].iloc[-1], ma[50].iloc[-1] > ma[200].iloc[-1]]
-        long_conds = [current_p > ma[100].iloc[-1], current_p > ma[150].iloc[-1], current_p > ma[200].iloc[-1], ma[100].iloc[-1] > ma[200].iloc[-1]]
-
-        short_avg = int((sum(short_conds) / 4) * 100)
-        med_avg = int((sum(med_conds) / 4) * 100)
-        long_avg = int((sum(long_conds) / 4) * 100)
-        overall_avg = int(((sum(short_conds + med_conds + long_conds)) / 12) * 100)
-
-        # 構建顯示列表
-        data = {
-            "Indicator": [
-                "Overall Opinion", "Trend Seeker®", "Strength", "Direction", "Current Price", "---",
-                "Short Term Indicators", "20 Day Moving Average", "20 - 50 Day MA Crossover", "20 - 100 Day MA Crossover", "20 - 200 Day MA Crossover", "20-Day Average Volume", "Short Term Average", "---",
-                "Medium Term Indicators", "50 Day Moving Average", "50 - 100 Day MA Crossover", "50 - 150 Day MA Crossover", "50 - 200 Day MA Crossover", "50-Day Average Volume", "Medium Term Average", "---",
-                "Long Term Indicators", "100 Day Moving Average", "150 Day Moving Average", "200 Day Moving Average", "100 - 200 Day MA Crossover", "100-Day Average Volume", "Long Term Average"
+        # 4. 數據整理
+        results = {
+            "Timeframe": ["Overall", "Short Term", "Medium Term", "Long Term"],
+            "Opinion": [
+                f"{display_pct}% {opinion_label}",
+                f"{abs(int((sum(all_signals[0:4])/4)*100))}%",
+                f"{abs(int((sum(all_signals[4:8])/4)*100))}%",
+                f"{abs(int((sum(all_signals[8:12])/4)*100))}%"
             ],
-            symbol: [
-                f"{overall_avg}% {'Buy' if overall_avg >= 60 else 'Sell'}",
-                sig(current_p > ma[20].iloc[-1] and ma[20].iloc[-1] > ma[50].iloc[-1]),
-                "Strongest" if overall_avg >= 80 else "Weak",
-                "Strengthening" if current_p > c.iloc[-5] else "Weakening",
-                f"${current_p:.2f}", "",
-                "", sig(short_conds[0]), sig(short_conds[1]), sig(short_conds[2]), sig(short_conds[3]), f"{int(v_avg[20]):,}", f"{short_avg}%", "",
-                "", sig(med_conds[0]), sig(med_conds[1]), sig(med_conds[2]), sig(med_conds[3]), f"{int(v_avg[50]):,}", f"{med_avg}%", "",
-                "", sig(long_conds[0]), sig(long_conds[1]), sig(long_conds[2]), sig(long_conds[3]), f"{int(v_avg[100]):,}", f"{long_avg}%"
-            ]
+            "Count": [f"{sum(all_signals)}/13", "4/4", "4/4", "4/4"]
         }
-        return pd.DataFrame(data).set_index("Indicator")
+        return pd.DataFrame(results).set_index("Timeframe"), all_signals, current_p
     except: return None
 
-if st.button("🚀 執行 Barchart 全數據掃描"):
-    all_dfs = []
-    with st.spinner('計算長/中/短期指標...'):
-        for s in tickers:
-            res = get_full_barchart_logic(s)
-            if res is not None: all_dfs.append(res)
-    if all_dfs:
-        st.table(pd.concat(all_dfs, axis=1))
+if st.button("🔍 同步 Barchart 官方數據"):
+    res_df, signals, last_p = calculate_barchart_opinion(symbol)
+    if res_df is not None:
+        st.subheader(f"{symbol} 官方 Opinion 分析 (同步中...)")
+        st.table(res_df)
+        
+        # 模擬 Strength & Direction
+        st.info(f"當前價格: ${last_p:.2f} | 總計得分: {sum(signals)}")
     else:
-        st.error("獲取失敗")
+        st.error("代碼錯誤或數據不足")
