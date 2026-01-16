@@ -46,14 +46,25 @@ def get_analysis(symbol):
     except:
         return None
 
+# ... 前面的 get_analysis 函數保持不變 ...
+
 if st.button("開始批量分析"):
     results = []
-    for s in tickers:
+    # 增加一個進度條，讓你知道網頁有在動
+    progress_bar = st.progress(0)
+    for i, s in enumerate(tickers):
         data = get_analysis(s)
-        if data: results.append(data)
+        if data:
+            results.append(data)
+        progress_bar.progress((i + 1) / len(tickers))
     
     if results:
         res_df = pd.DataFrame(results)
-        st.dataframe(res_df.style.background_gradient(cmap='RdYlGn', subset=['現價']))
+        # 使用更漂亮的顯示方式
+        st.subheader("分析結果")
+        st.dataframe(
+            res_df.style.background_gradient(cmap='RdYlGn', subset=['RSI'])
+            .format({"現價": "${:.2f}"})
+        )
     else:
-        st.error("請輸入正確的代碼")
+        st.warning("⚠️ 找不到數據，請確認代碼格式是否正確（例如美股用 NVDA，港股用 0700.HK）")
