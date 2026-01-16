@@ -2,99 +2,116 @@ import streamlit as st
 import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Barchart 專業分析器 2.6", layout="wide")
-st.title("📊 專業技術指標矩陣 2.6 (布林帶全方位版)")
+st.set_page_config(page_title="Google Finance 實時分析儀", layout="wide")
+st.title("📊 實時數據分析矩陣 (Google Finance API-less)")
 
-ticker_input = st.text_input("請輸入股票代碼 (用逗號分隔):", "BFLY, CLOV, NVDA, TSLA")
+ticker_input = st.text_input("輸入股票代碼 (例如: CLOV, BFLY, NVDA):", "BFLY, CLOV, NVDA")
 tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
-def get_barchart_pro_analysis(symbol):
+def get_google_realtime_price(symbol):
+    """從 Google 搜尋直接抓取實時報價"""
     try:
-        # 抓取數據
-        df = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 200: return None
-
-        # 處理資料格式
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        url = f"https://www.google.com/search?q=stock+price+{symbol}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, "html.parser")
         
-        c = df['Close'].squeeze()
-        v = df['Volume'].squeeze()
-
-        # 1. 基礎指標計算
-        ma20, ma50, ma100, ma150, ma200 = [ta.sma(c, length=l) for l in [20, 50, 100, 150, 200]]
-        rsi = ta.rsi(c, length=14)
+        # 尋找 Google 價格標籤
+        price_tags = soup.find_all("span", attrs={"data-precision": True})
+        if not price_tags:
+            # 備用選擇器
+            price_div = soup.find("div", attrs={"class": "YMlS7e"})
+            if price_div:
+                price = float(price_div.text.replace(",", "").replace("$", ""))
+                return price
         
-        # 2. 布林帶三軌計算
-        bbands = ta.bbands(c, length=20, std=2)
-        l_col = [col for col in bbands.columns if 'BBL' in col][0] # 下軌
-        m_col = [col for col in bbands.columns if 'BBM' in col][0] # 中軌
-        u_col = [col for col in bbands.columns if 'BBU' in col][0] # 上軌
-        
-        last_p = float(c.iloc[-1])
-        last_rsi = float(rsi.iloc[-1])
-        last_bbl = float(bbands[l_col].iloc[-1])
-        last_bbm = float(bbands[m_col].iloc[-1])
-        last_bbu = float(bbands[u_col].iloc[-1])
-        
-        # 3. 判定邏輯
-        # 中軌判定：價格 > 中軌 (代表進入強勢區)
-        is_above_mid = last_p > last_bbm
-        # 壓力判定：價格 < 上軌 (代表尚未過熱)
-        is_below_upper = last_p < last_bbu
-        # 支撐判定：價格 > 下軌 (代表支撐有效)
-        is_above_lower = last_p > last_bbl
+        price = float(price_tags[0].text.replace(",", "").replace("$", ""))
+        return price
+    except:
+        return None
 
-        conds = [
-            last_p > ma20.iloc[-1], ma20.iloc[-1] > ma50.iloc[-1], ma20.iloc[-1] > ma100.iloc[-1], 
-            ma20.iloc[-1] > ma200.iloc[-1], last_p > ma50.iloc[-1], ma50.iloc[-1] > ma100.iloc[-1], 
-            ma50.iloc[-1] > ma150.iloc[-1], ma50.iloc[-1] > ma200.iloc[-1], last_p > ma100.iloc[-1], 
-            last_p > ma150.iloc[-1], last_p > ma200.iloc[-1], ma100.iloc[-1] > ma200.iloc[-1], 
-            v.iloc[-1] > v.rolling(20).mean().iloc[-1], last_rsi > 50, is_above_lower
-        ]
-
-        buy_count = sum([1 for b in conds if b])
-        opinion_pct = int((buy_count / len(conds)) * 100)
+def get_analysis(symbol):
+    try:
+        # 1. 抓取歷史數據 (Yahoo Finance)
+        df = yf.download(symbol, period="1y", interval="1d", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 20: return None
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
-        def format_sig(cond, true_msg="🟢 Buy / Safe", false_msg="🔴 Sell / Alert"):
-            return true_msg if cond else false_msg
+        close_series = df['Close'].squeeze()
+        
+        # 2. 獲取實時價格 (Google Finance)
+        current_p = get_google_realtime_price(symbol)
+        if current_p is None:
+            current_p = float(close_series.iloc[-1]) # 備援方案
 
+        # 3. 計算技術指標
+        ma20 = close_series.rolling(window=20).mean()
+        std20 = close_series.rolling(window=20).std()
+        
+        mid_band = float(ma20.iloc[-1])
+        upper_band = mid_band + (float(std20.iloc[-1]) * 2)
+        lower_band = mid_band - (float(std20.iloc[-1]) * 2)
+        
+        rsi = ta.rsi(close_series, length=14).iloc[-1]
+        
+        # 4. 判定邏輯
+        is_above_mid = current_p > mid_band
+        is_above_lower = current_p > lower_band
+        is_below_upper = current_p < upper_band
+        
+        # 5. 綜合評分 (改為 100% 制)
+        score = 0
+        if is_above_mid: score += 20
+        if is_above_lower: score += 20
+        if is_below_upper: score += 20
+        if rsi > 50: score += 20
+        if current_p > ta.sma(close_series, length=50).iloc[-1]: score += 20
+        
+        def format_sig(cond, true_msg, false_msg):
+            return f"🟢 {true_msg}" if cond else f"🔴 {false_msg}"
+
+        # 6. 整理數據結構 (確保「當前股價」排在顯眼位置)
         data = {
             "Indicator": [
-                "Overall Opinion", "Strength", "Direction", "RSI (14)", "---",
-                "20 Day Moving Average", "20-50 Day MA Crossover", "20-200 Day MA Crossover", "---",
-                "50 Day Moving Average", "50-200 Day MA Crossover", "---",
-                "100 Day Moving Average", "200 Day Moving Average", "---",
-                "Bollinger Support (下軌)", "Bollinger Mid-Band (強弱勢)", "Bollinger Resistance (上軌)", "---",
+                "Overall Opinion",
+                "Current Price (Google)",  # 新增這一行
+                "Middle Band (20 MA)",
+                "---",
+                "Bollinger Mid-Band (強弱勢)",
+                "Bollinger Support (下軌支撐)",
+                "Bollinger Resistance (上軌壓力)",
+                "RSI (14)",
                 "20D Avg Volume"
             ],
             symbol: [
-                f"{opinion_pct}% {'Buy' if opinion_pct >= 50 else 'Sell'}", 
-                "Strongest" if sum([1 for b in conds[8:12] if b]) >= 3 else "Weak",
-                "Strengthening" if c.iloc[-1] > c.iloc[-5] else "Weakening",
-                f"{last_rsi:.1f}", "",
-                format_sig(conds[0]), format_sig(conds[1]), format_sig(conds[3]), "",
-                format_sig(conds[4]), format_sig(conds[7]), "",
-                format_sig(conds[8]), format_sig(conds[10]), "",
-                format_sig(is_above_lower), 
-                format_sig(is_above_mid, "🟢 Bullish (中軌上)", "🔴 Bearish (中軌下)"),
-                format_sig(is_below_upper, "🟢 Below Resistance", "🔥 At Resistance"), "",
-                f"{int(v.tail(20).mean()):,}"
+                f"{score}% {'Buy' if score >= 60 else 'Hold' if score >= 40 else 'Sell'}",
+                f"${current_p:.2f}",   # 顯示數值
+                f"${mid_band:.2f}",    # 顯示數值
+                "",
+                format_sig(is_above_mid, "Bullish (中軌上)", "Bearish (中軌下)"),
+                format_sig(is_above_lower, "Safe (支撐有效)", "Broken (破位)"),
+                format_sig(is_below_upper, "Below Resistance", "At Resistance (超漲)"),
+                f"{rsi:.1f}",
+                f"{int(df['Volume'].tail(20).mean()):,}"
             ]
         }
         return pd.DataFrame(data).set_index("Indicator")
     except Exception as e:
         return None
 
-if st.button("🚀 執行全方位技術掃描"):
-    all_dfs = []
-    with st.spinner('正在分析布林軌道結構...'):
+if st.button("🚀 執行實時同步分析"):
+    results = []
+    with st.spinner('正在同步 Google Finance 即時數據...'):
         for s in tickers:
-            res = get_barchart_pro_analysis(s)
-            if res is not None: all_dfs.append(res)
+            res = get_analysis(s)
+            if res is not None:
+                results.append(res)
     
-    if all_dfs:
-        st.table(pd.concat(all_dfs, axis=1))
+    if results:
+        final_df = pd.concat(results, axis=1)
+        st.table(final_df)
     else:
-        st.error("無法獲取數據，請確認代碼。")
+        st.error("無法獲取數據，請檢查網路連線。")
