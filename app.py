@@ -4,30 +4,30 @@ import pandas_ta as ta
 import pandas as pd
 
 # 網頁配置
-st.set_page_config(page_title="Barchart 專業模擬器 2.0", layout="wide")
+st.set_page_config(page_title="Barchart 專業分析器 (修正版)", layout="wide")
 
-st.title("📊 專業技術指標矩陣 2.0 (Barchart 模擬版)")
-st.markdown("""
-本系統模擬 Barchart Opinion 綜合評分邏輯：
-- **指標權重**: 包含 20/50/100/150/200 日均線、RSI 動能與布林帶支撐。
-- **資料來源**: Yahoo Finance 實時數據。
-""")
+st.title("📊 專業技術指標矩陣 (Barchart 模擬版)")
 
-# 用戶輸入股票代碼 (預設放幾隻股票，避免一開始顯示錯誤)
+# 預設股票，方便用戶測試
 ticker_input = st.text_input("請輸入股票代碼 (用逗號分隔):", "BFLY, CLOV, NVDA, AAPL")
 tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
 def get_barchart_pro_analysis(symbol):
     try:
-        # 下載數據 (增加 threads=False 提高在 Streamlit 上的穩定度)
-        df = yf.download(symbol, period="2y", interval="1d", progress=False, threads=False)
+        # 下載數據：加入 auto_adjust=True 確保價格格式統一
+        # period="2y" 確保有足夠資料計算 200MA
+        df = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=True)
         
         if df.empty or len(df) < 200:
             return None
 
-        # 處理資料格式 (相容 yfinance 新舊版本)
-        c = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-        v = df['Volume'].iloc[:, 0] if isinstance(df['Volume'], pd.DataFrame) else df['Volume']
+        # --- 核心修正：處理 Multi-Index ---
+        # 如果列名是多層的 (例如 ('Close', 'CLOV'))，我們只取最底層的 Close
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        c = df['Close']
+        v = df['Volume']
 
         # 1. 計算均線指標
         ma20 = ta.sma(c, length=20)
@@ -49,34 +49,22 @@ def get_barchart_pro_analysis(symbol):
         
         # 4. 15 個 Barchart 判斷條件
         conds = [
-            last_p > ma20.iloc[-1],           # 1
-            ma20.iloc[-1] > ma50.iloc[-1],    # 2
-            ma20.iloc[-1] > ma100.iloc[-1],   # 3
-            ma20.iloc[-1] > ma200.iloc[-1],   # 4
-            last_p > ma50.iloc[-1],           # 5
-            ma50.iloc[-1] > ma100.iloc[-1],   # 6
-            ma50.iloc[-1] > ma150.iloc[-1],   # 7
-            ma50.iloc[-1] > ma200.iloc[-1],   # 8
-            last_p > ma100.iloc[-1],          # 9
-            last_p > ma150.iloc[-1],          # 10
-            last_p > ma200.iloc[-1],          # 11
-            ma100.iloc[-1] > ma200.iloc[-1],  # 12
-            v.iloc[-1] > v20.iloc[-1],        # 13
-            last_rsi > 50,                    # 14
-            last_p > last_bbl                 # 15
+            last_p > ma20.iloc[-1], ma20.iloc[-1] > ma50.iloc[-1], ma20.iloc[-1] > ma100.iloc[-1], 
+            ma20.iloc[-1] > ma200.iloc[-1], last_p > ma50.iloc[-1], ma50.iloc[-1] > ma100.iloc[-1], 
+            ma50.iloc[-1] > ma150.iloc[-1], ma50.iloc[-1] > ma200.iloc[-1], last_p > ma100.iloc[-1], 
+            last_p > ma150.iloc[-1], last_p > ma200.iloc[-1], ma100.iloc[-1] > ma200.iloc[-1], 
+            v.iloc[-1] > v20.iloc[-1], last_rsi > 50, last_p > last_bbl
         ]
 
         buy_count = sum([1 for b in conds if b])
         opinion_pct = int((buy_count / len(conds)) * 100)
         
-        # 根據 Barchart 標準定義標籤
         if opinion_pct >= 70: opinion_label = "Strong Buy"
         elif opinion_pct >= 55: opinion_label = "Buy"
         elif opinion_pct >= 45: opinion_label = "Hold"
         elif opinion_pct >= 30: opinion_label = "Sell"
         else: opinion_label = "Strong Sell"
 
-        # 強度與方向
         long_term_score = sum([1 for b in conds[8:12] if b])
         strength = "Strongest" if long_term_score >= 3 else "Average" if long_term_score >= 2 else "Weak"
         
@@ -85,7 +73,6 @@ def get_barchart_pro_analysis(symbol):
 
         def format_sig(cond): return "🟢 Buy" if cond else "🔴 Sell"
 
-        # 整理成 DataFrame
         data = {
             "Indicator": [
                 "Overall Opinion", "Strength", "Direction", "RSI (14)", "---",
@@ -103,13 +90,14 @@ def get_barchart_pro_analysis(symbol):
             ]
         }
         return pd.DataFrame(data).set_index("Indicator")
-    except Exception:
+    except Exception as e:
+        # 在開發時很有用的報錯提示
+        st.sidebar.error(f"{symbol} 錯誤: {e}")
         return None
 
-# 按鈕觸發
 if st.button("🚀 執行深度分析"):
     all_dfs = []
-    with st.spinner('正在分析數據，請稍候...'):
+    with st.spinner('正在從 Yahoo Finance 抓取資料...'):
         for s in tickers:
             res = get_barchart_pro_analysis(s)
             if res is not None:
@@ -119,4 +107,4 @@ if st.button("🚀 執行深度分析"):
         final_df = pd.concat(all_dfs, axis=1)
         st.table(final_df)
     else:
-        st.error("⚠️ 無法獲取數據。請檢查網路連接或代碼格式（美股 NVDA，港股 0700.HK）。")
+        st.error("⚠️ 抓取失敗。可能原因：代碼輸入錯誤、Yahoo 暫時限制連線。請嘗試重新點擊按鈕。")
