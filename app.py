@@ -20,6 +20,14 @@ tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
 def get_barchart_full_analysis(symbol):
     try:
+        # 加入 RSI 和 隨機指標
+rsi = ta.rsi(c, length=14)
+stoch = ta.stoch(df['High'], df['Low'], c) # 回傳是一個 DataFrame
+
+# 增加 2 個判斷條件
+conds.append(rsi.iloc[-1] < 30) # RSI 超賣，視為潛在 Buy (反彈信號)
+conds.append(stoch['STOCKk_14_3_3'].iloc[-1] > stoch['STOCKd_14_3_3'].iloc[-1]) # K線穿過D線
+
         # 下載兩年數據以確保指標計算穩定
         df = yf.download(symbol, period="2y", interval="1d", progress=False, threads=False)
         if df.empty or len(df) < 200:
@@ -120,3 +128,4 @@ if st.button("🚀 執行全指標分析"):
         st.warning("查無數據，請確認股票代碼（如 CLOV, NVDA）。")
 
 st.info("💡 註：100% Buy 意味著當前價格位於所有均線上方，且均線呈現多頭排列。")
+
