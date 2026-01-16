@@ -3,31 +3,27 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
 
-# 網頁配置
-st.set_page_config(page_title="Barchart 專業分析器 (修正版)", layout="wide")
-
+st.set_page_config(page_title="Barchart 專業分析器 (穩定版)", layout="wide")
 st.title("📊 專業技術指標矩陣 (Barchart 模擬版)")
 
-# 預設股票，方便用戶測試
 ticker_input = st.text_input("請輸入股票代碼 (用逗號分隔):", "BFLY, CLOV, NVDA, AAPL")
 tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
 def get_barchart_pro_analysis(symbol):
     try:
-        # 下載數據：加入 auto_adjust=True 確保價格格式統一
-        # period="2y" 確保有足夠資料計算 200MA
+        # 下載數據，使用 auto_adjust=True 簡化欄位
         df = yf.download(symbol, period="2y", interval="1d", progress=False, auto_adjust=True)
         
         if df.empty or len(df) < 200:
             return None
 
-        # --- 核心修正：處理 Multi-Index ---
-        # 如果列名是多層的 (例如 ('Close', 'CLOV'))，我們只取最底層的 Close
+        # 核心修正 1：處理 MultiIndex 並確保變為 Series
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
-        c = df['Close']
-        v = df['Volume']
+        
+        # 強制轉換為單一股票的 Series 格式，避免欄位名稱干擾
+        c = df['Close'].squeeze()
+        v = df['Volume'].squeeze()
 
         # 1. 計算均線指標
         ma20 = ta.sma(c, length=20)
@@ -36,18 +32,22 @@ def get_barchart_pro_analysis(symbol):
         ma150 = ta.sma(c, length=150)
         ma200 = ta.sma(c, length=200)
         
-        # 2. 計算 RSI 與 布林帶
+        # 2. 計算 RSI
         rsi = ta.rsi(c, length=14)
+        
+        # 核心修正 2：計算布林帶並動態抓取欄位名稱
         bbands = ta.bbands(c, length=20, std=2)
+        # 自動尋找包含 'BBL' (下軌) 的欄位，不論它叫 BBL_20_2.0 還是 BBL_20
+        lower_band_col = [col for col in bbands.columns if 'BBL' in col][0]
+        last_bbl = float(bbands[lower_band_col].iloc[-1])
         
         # 3. 成交量均線
         v20 = v.rolling(window=20).mean()
 
         last_p = float(c.iloc[-1])
         last_rsi = float(rsi.iloc[-1])
-        last_bbl = float(bbands['BBL_20_2.0'].iloc[-1])
         
-        # 4. 15 個 Barchart 判斷條件
+        # 4. 15 個判斷條件
         conds = [
             last_p > ma20.iloc[-1], ma20.iloc[-1] > ma50.iloc[-1], ma20.iloc[-1] > ma100.iloc[-1], 
             ma20.iloc[-1] > ma200.iloc[-1], last_p > ma50.iloc[-1], ma50.iloc[-1] > ma100.iloc[-1], 
@@ -91,13 +91,12 @@ def get_barchart_pro_analysis(symbol):
         }
         return pd.DataFrame(data).set_index("Indicator")
     except Exception as e:
-        # 在開發時很有用的報錯提示
-        st.sidebar.error(f"{symbol} 錯誤: {e}")
+        st.sidebar.error(f"{symbol} 詳細錯誤: {e}")
         return None
 
 if st.button("🚀 執行深度分析"):
     all_dfs = []
-    with st.spinner('正在從 Yahoo Finance 抓取資料...'):
+    with st.spinner('正在分析中...'):
         for s in tickers:
             res = get_barchart_pro_analysis(s)
             if res is not None:
@@ -107,4 +106,4 @@ if st.button("🚀 執行深度分析"):
         final_df = pd.concat(all_dfs, axis=1)
         st.table(final_df)
     else:
-        st.error("⚠️ 抓取失敗。可能原因：代碼輸入錯誤、Yahoo 暫時限制連線。請嘗試重新點擊按鈕。")
+        st.error("⚠️ 無法讀取數據。請檢查側邊欄錯誤訊息。")
