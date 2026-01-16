@@ -2,82 +2,82 @@ import streamlit as st
 import yfinance as yf
 import pandas_ta as ta
 import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="專業級股票分析儀", layout="wide")
-st.title("📊 批量股票分析診斷儀")
+st.set_page_config(page_title="Barchart Style Analyzer", layout="wide")
+st.title("📊 專業級趨勢強度分析儀")
 
-# 側邊欄：設定參數
-with st.sidebar:
-    st.header("設定")
-    period = st.selectbox("分析週期", ["1y", "2y", "5y"], index=0)
-
-# 輸入框
-ticker_input = st.text_input("輸入股票代碼 (例如: BFLY, NVDA, 0700.HK):", "BFLY, NVDA, TSLA")
+ticker_input = st.text_input("輸入股票代碼 (例如: BFLY, BAER, TSLA):", "BFLY, NVDA")
 tickers = [t.strip().upper() for t in ticker_input.split(",")]
 
-def get_analysis(symbol):
+def analyze_stock(symbol):
     try:
-        # 下載數據，增加 threads=False 防止 Streamlit 衝突
-        df = yf.download(symbol, period=period, interval="1d", progress=False, threads=False)
+        # 抓取足夠長度的數據以計算 200MA
+        df = yf.download(symbol, period="2y", interval="1d", progress=False, threads=False)
+        if df.empty or len(df) < 200: return None
+
+        # 處理 Multi-index 問題
+        c = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
         
-        # 診斷：如果 df 是空的
-        if df.empty or len(df) < 50:
-            return {"代碼": symbol, "狀態": "❌ 抓不到數據"}
+        # --- 計算指標 ---
+        ma20 = ta.sma(c, length=20)
+        ma50 = ta.sma(c, length=50)
+        ma100 = ta.sma(c, length=100)
+        ma200 = ta.sma(c, length=200)
         
-        # 指標計算 (修正 yfinance 新版 multi-index 問題)
-        close_prices = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+        last_price = c.iloc[-1]
+        prev_price_5d = c.iloc[-5]
         
-        ema20 = ta.ema(close_prices, length=20)
-        ema50 = ta.ema(close_prices, length=50)
-        rsi = ta.rsi(close_prices, length=14)
+        # --- 1. Strength (強度) 邏輯 ---
+        # 判斷標準：價格高於均線的層次
+        strength_score = 0
+        if last_price > ma200.iloc[-1]: strength_score += 40
+        if last_price > ma100.iloc[-1]: strength_score += 30
+        if ma50.iloc[-1] > ma200.iloc[-1]: strength_score += 30
         
-        last_price = close_prices.iloc[-1]
-        last_rsi = rsi.iloc[-1]
-        
-        # 簡單評分邏輯
-        score = 0
-        if last_price > ema20.iloc[-1]: score += 1
-        if last_price > ema50.iloc[-1]: score += 1
-        if last_rsi > 50: score += 1
-        
-        total_pct = (score / 3) * 100
-        
+        strength_label = "Very Strong" if strength_score >= 90 else "Strong" if strength_score >= 60 else "Average" if strength_score >= 30 else "Weak"
+
+        # --- 2. Direction (方向) 邏輯 ---
+        # 比較今日價格與 5 日前價格的斜率
+        diff_5d = ((last_price - prev_price_5d) / prev_price_5d) * 100
+        if diff_5d > 2: direction = "🚀 Strengthening"
+        elif diff_5d < -2: direction = "📉 Weakening"
+        else: direction = "➡️ Steady"
+
+        # --- 3. 趨勢線意見 ---
+        def get_op(price, ma):
+            return "✅ Buy" if price > ma else "❌ Sell"
+
         return {
             "代碼": symbol,
-            "狀態": "✅ 成功",
             "現價": f"${last_price:.2f}",
-            "評分": f"{total_pct:.0f}%",
-            "意見": "買入" if total_pct >= 66 else "持有" if total_pct >= 33 else "賣出",
-            "RSI": round(last_rsi, 1)
+            "Overall Opinion": f"{strength_score}% {'Buy' if strength_score > 50 else 'Sell'}",
+            "Strength": strength_label,
+            "Direction": direction,
+            "20D 短期趨勢": get_op(last_price, ma20.iloc[-1]),
+            "50D 中期趨勢": get_op(last_price, ma50.iloc[-1]),
+            "100D 長期趨勢": get_op(last_price, ma100.iloc[-1]),
         }
-    except Exception as e:
-        return {"代碼": symbol, "狀態": f"⚠️ 錯誤: {str(e)[:20]}"}
+    except:
+        return None
 
-if st.button("🚀 開始深度分析"):
-    results = []
-    status_text = st.empty()
+if st.button("執行 Barchart 風格分析"):
+    data_list = []
+    with st.spinner('分析中...'):
+        for s in tickers:
+            res = analyze_stock(s)
+            if res: data_list.append(res)
     
-    for s in tickers:
-        status_text.text(f"正在分析: {s}...")
-        data = get_analysis(s)
-        if data:
-            results.append(data)
-    
-    status_text.empty()
-    
-    if results:
-        res_df = pd.DataFrame(results)
+    if data_list:
+        res_df = pd.DataFrame(data_list)
         
-        # 區分成功與失敗
-        success_df = res_df[res_df["狀態"] == "✅ 成功"]
-        error_df = res_df[res_df["狀態"] != "✅ 成功"]
-        
-        if not success_df.empty:
-            st.subheader("✅ 分析報告")
-            # 根據評分排序
-            success_df = success_df.sort_values(by="評分", ascending=False)
-            st.table(success_df)
-            
-        if not error_df.empty:
-            st.subheader("❌ 讀取失敗名單")
-            st.write(error_df)
+        # 根據 Opinion 著色
+        def color_op(val):
+            if 'Buy' in str(val): color = '#228B22' # 森林綠
+            elif 'Sell' in str(val): color = '#DC143C' # 猩紅
+            else: color = 'white'
+            return f'background-color: {color}; color: white; font-weight: bold'
+
+        st.table(res_df.style.applymap(color_op, subset=["Overall Opinion", "20D 短期趨勢", "50D 中期趨勢", "100D 長期趨勢"]))
+    else:
+        st.warning("查無數據，請確認代碼。")
