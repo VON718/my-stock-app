@@ -28,7 +28,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. 初始化 Session State 狀態（跨分頁資料與清單狀態持久化）
+# 2. 初始化 Session State 狀態
 DEFAULT_TICKERS = "NVDA, TSLA, AAPL, PLTR, AMD, MSFT, META, GOOGL, CRWD, SMCI"
 
 if "shared_tickers_text" not in st.session_state:
@@ -45,7 +45,6 @@ if "scan_results" not in st.session_state:
 if "barchart_results" not in st.session_state:
     st.session_state.barchart_results = None
 
-# 輔助：解析字串為代碼清單
 def parse_tickers(raw_str):
     return [t.strip().upper() for t in raw_str.replace(',', ' ').split() if t.strip()]
 
@@ -59,7 +58,7 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🔄 盤中自動輪詢")
-    enable_autorefresh = st.checkbox("啟用定時自動掃描", value=False)
+    enable_autorefresh = st.checkbox("啟用定時自動雙掃描", value=False)
     refresh_interval = st.selectbox("輪詢間隔", [60, 180, 300, 600], index=2, format_func=lambda x: f"{x} 秒")
     if enable_autorefresh and AUTOREFRESH_AVAILABLE:
         st_autorefresh(interval=refresh_interval * 1000, key="auto_scanner_refresh")
@@ -68,7 +67,7 @@ with st.sidebar:
     st.subheader("📢 即時推播 (Discord)")
     discord_webhook_url = st.text_input("Discord Webhook URL", type="password", placeholder="https://discord.com/api/webhooks/...")
 
-# ==================== 核心分析函式 ====================
+# ==================== 核心量化模型函式 ====================
 @st.cache_data(ttl=300)
 def get_market_regime_and_spy():
     try:
@@ -406,7 +405,6 @@ def get_barchart_analysis(symbol):
     except Exception:
         return None
 
-
 # ==================== 大盤信號展示 ====================
 regime, spy_df = get_market_regime_and_spy()
 
@@ -418,17 +416,17 @@ if regime:
     else:
         st.warning("🟡 **大盤信號：震盪整理期 (Caution)** ｜ 大盤跌破短期均線或兩指步調不一，操作以防守為主。")
 
-# ==================== 🎯 全域股票池與跨分頁同步中心 ====================
+# ==================== 🎯 全域股票池與一鍵雙掃描中心 ====================
 with st.container():
     st.markdown("### 🎯 全域股票池與跨分頁同步中心 (Global Ticker Hub)")
     
-    # 快捷載入預設組合回調函式
+    # 快捷組合按鈕
     def set_preset(preset_str):
         st.session_state.shared_tickers_text = preset_str
         st.session_state.tab_pro_tickers = preset_str
         st.session_state.tab_bc_tickers = preset_str
 
-    preset_col1, preset_col2, preset_col3, preset_col4 = st.columns([1.2, 1.2, 1.2, 2.4])
+    preset_col1, preset_col2, preset_col3, _ = st.columns([1.2, 1.2, 1.2, 2.4])
     with preset_col1:
         if st.button("💎 科技巨頭 (Mag 7)", use_container_width=True):
             set_preset("AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA")
@@ -442,24 +440,70 @@ with st.container():
             set_preset("CLOV, BFLY, SOFI, PLTR, IONQ, CRWD, HOOD, RKLB")
             st.rerun()
 
-    input_col, sync_btn_col = st.columns([4, 1])
+    # 輸入列與功能按鈕列
+    input_col, sync_btn_col, dual_scan_col = st.columns([3.5, 1.1, 1.4])
     with input_col:
         global_input = st.text_input(
-            "輸入股票代碼 (逗號或空格隔開，修改後點右側按鈕一鍵同步至雙分頁):",
+            "輸入股票代碼 (逗號或空格隔開):",
             value=st.session_state.shared_tickers_text,
             key="global_ticker_input_box"
         )
     with sync_btn_col:
         st.write("") # 對齊版面
-        if st.button("🔄 一鍵同步雙分頁", use_container_width=True):
+        if st.button("🔄 僅同步名單", use_container_width=True):
             st.session_state.shared_tickers_text = global_input
             st.session_state.tab_pro_tickers = global_input
             st.session_state.tab_bc_tickers = global_input
-            st.toast("✅ 股票名單已同步至兩個分頁！", icon="🚀")
+            st.toast("✅ 代碼已同步至所有分頁！", icon="🔄")
             st.rerun()
+    with dual_scan_col:
+        st.write("") # 對齊版面
+        btn_dual_scan = st.button("⚡ 一鍵掃描所有分頁", type="primary", use_container_width=True)
 
-    active_tickers = parse_tickers(st.session_state.shared_tickers_text)
+    active_tickers = parse_tickers(global_input)
     st.caption(f"📌 當前全域觀察池共有 **{len(active_tickers)}** 檔標的: `{', '.join(active_tickers)}`")
+
+    # 執行一鍵全分頁雙核心掃描
+    if btn_dual_scan or enable_autorefresh:
+        if not active_tickers:
+            st.warning("⚠️ 觀察名單為空，請先輸入股票代碼。")
+        else:
+            # 確保同步當前代碼
+            st.session_state.shared_tickers_text = global_input
+            st.session_state.tab_pro_tickers = global_input
+            st.session_state.tab_bc_tickers = global_input
+
+            with st.status("🚀 正在啟動雙核心全維度實時掃描...", expanded=True) as status_box:
+                # 1. 突破掃描計算
+                st.write("📊 階段 1/2：計算 VCP 型態、52W 樞紐、RS 相對強度與避雷預警...")
+                pro_results = []
+                for idx, sym in enumerate(active_tickers, 1):
+                    res = analyze_stock(sym, account_capital, max_risk_amount, spy_df)
+                    if res:
+                        pro_results.append(res)
+                
+                if pro_results:
+                    df_temp = pd.DataFrame(pro_results)
+                    df_temp = df_temp.sort_values(by=['建議行動', '距52W高點'], ascending=[False, True])
+                    st.session_state.scan_results = df_temp
+                else:
+                    st.session_state.scan_results = None
+
+                # 2. Barchart 矩陣計算
+                st.write("📈 階段 2/2：計算 Barchart 13 均線指標與布林帶三軌...")
+                bc_results = []
+                for sym in active_tickers:
+                    bc_res = get_barchart_analysis(sym)
+                    if bc_res is not None:
+                        bc_results.append(bc_res)
+                
+                if bc_results:
+                    st.session_state.barchart_results = pd.concat(bc_results, axis=1)
+                else:
+                    st.session_state.barchart_results = None
+
+                status_box.update(label="✅ 雙核心掃描完成！所有分頁數據已同步更新。", state="complete", expanded=False)
+                st.toast("🎉 雙核心掃描已完成，點擊下方各分頁即可檢視！", icon="⚡")
 
 st.divider()
 
@@ -490,7 +534,7 @@ with tab_pro:
 
     tickers_pro = parse_tickers(input_val_pro)
 
-    if st.button("🚀 開始全維度深度掃描", key="btn_run_pro") or enable_autorefresh:
+    if st.button("🚀 單獨執行本分頁掃描", key="btn_run_pro"):
         if not tickers_pro:
             st.warning("請先輸入股票代碼。")
         else:
@@ -596,7 +640,7 @@ with tab_barchart:
 
     tickers_bc = parse_tickers(input_val_bc)
 
-    if st.button("🚀 執行全方位實時數據掃描", key="btn_run_barchart"):
+    if st.button("🚀 單獨執行本分頁掃描", key="btn_run_barchart"):
         if not tickers_bc:
             st.warning("請先輸入股票代碼。")
         else:
