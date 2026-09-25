@@ -1,4 +1,8 @@
 streamlit
 yfinance
-pandas_ta
 pandas
+pandas_ta
+plotly
+streamlit-autorefresh
+scipy
+numpy
